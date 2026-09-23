@@ -16,6 +16,7 @@
     --text-dim: #8B979C;
     --text-faint: #5C666A;
     --accent: #E8A33D;
+    --accent-ink: #1A1300;
     --accent-dim: rgba(232,163,61,0.16);
     --danger: #D96C6C;
     --radius: 7px;
@@ -93,7 +94,8 @@
     white-space: nowrap;
   }
   button:hover{ border-color: var(--text-faint); }
-  button.primary{ background: var(--accent); border-color: var(--accent); color:#1A1300; font-weight:600; }
+  button.primary{ background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight:600; }
+  .theme-select{ min-width: 220px; }
   button.primary:hover{ filter:brightness(1.08); }
   button.ghost{ background:transparent; }
   button.small{ padding:3px 7px; font-size:11px; }
@@ -172,6 +174,22 @@
   .tips b{ color:var(--text); }
 
   select option{ background: var(--panel-2); }
+
+  .color-picker-row{ align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:0; }
+  .color-picker-label{ font-size:11.5px; color:var(--text-dim); flex:none; }
+  .palette-swatches{ display:flex; flex-wrap:wrap; gap:5px; flex:none; }
+  .palette-swatch{
+    width:18px; height:18px; border-radius:50%; cursor:pointer;
+    border:2px solid transparent; box-shadow: 0 0 0 1px var(--border);
+    flex:none; padding:0;
+  }
+  .palette-swatch:hover{ transform: scale(1.12); }
+  .palette-swatch.selected{ border-color: var(--text); box-shadow: 0 0 0 1px var(--text); }
+  .color-custom-input{
+    width:26px; height:24px; padding:0; border:1px solid var(--border); border-radius:4px;
+    background:none; flex:none; cursor:pointer;
+  }
+  .color-custom-input.selected{ box-shadow: 0 0 0 2px var(--text); border-radius:6px; }
 </style>
 </head>
 <body>
@@ -184,6 +202,7 @@
     </div>
     <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
       <div class="row" style="margin:0; flex:none; gap:8px;">
+        <select id="theme-select" class="theme-select"></select>
         <button class="ghost" id="btn-sample">サンプルを読み込む</button>
         <button class="ghost" id="btn-export">JSONを書き出す</button>
       </div>
@@ -202,6 +221,12 @@
         <div class="row">
           <input type="text" id="node-category" list="category-list" placeholder="カテゴリ (任意・色分け用)">
           <button class="primary" id="btn-add-node" style="flex:none;">追加</button>
+        </div>
+        <div class="row color-picker-row">
+          <span class="color-picker-label">色:</span>
+          <div class="palette-swatches" id="node-palette-swatches"></div>
+          <input type="color" id="node-color-custom" class="color-custom-input" value="#4FB6A8" title="カスタムカラー">
+          <button type="button" class="small ghost" id="node-color-auto">自動</button>
         </div>
         <datalist id="category-list"></datalist>
         <div class="list" id="node-list"></div>
@@ -323,8 +348,95 @@ let colorMode = 'source';
 let idCounter = 0;
 let editingNodeId = null;
 let editingLinkId = null;
+let pendingNodeColor = null;
+let editingNodeColor = null;
+let currentThemeId = 'dark';
 
 const PALETTE = ['#4FB6A8','#E8A33D','#D96C6C','#7C9CDE','#B98CD9','#8FBF6B','#E3C567','#5FA8D3','#DE8F68','#6FBF9E','#C98BC7','#9AC46B'];
+
+// ---------- Design themes (for presentation-ready color schemes) ----------
+const THEMES = {
+  dark: {
+    label: 'デフォルト (ダーク)',
+    vars: { bg:'#0F1416', panel:'#161C1F', panel2:'#1C2327', border:'#2A3336', text:'#ECF0F1', textDim:'#8B979C', textFaint:'#5C666A', accent:'#E8A33D', accentInk:'#1A1300' },
+    palette: ['#4FB6A8','#E8A33D','#D96C6C','#7C9CDE','#B98CD9','#8FBF6B','#E3C567','#5FA8D3','#DE8F68','#6FBF9E','#C98BC7','#9AC46B']
+  },
+  bcg: {
+    label: 'BCG系 (白 × 深緑)',
+    vars: { bg:'#FFFFFF', panel:'#F5F8F6', panel2:'#FFFFFF', border:'#D9E2DC', text:'#14261F', textDim:'#57685F', textFaint:'#8FA098', accent:'#0B4F3A', accentInk:'#FFFFFF' },
+    palette: ['#0B4F3A','#17805C','#2FA684','#57C9A5','#8FE0C3','#0F6B4C','#3FA980','#0B3D2E']
+  },
+  mizuho: {
+    label: 'みずほ系 (紺 × 赤)',
+    vars: { bg:'#FFFFFF', panel:'#F4F6FA', panel2:'#FFFFFF', border:'#D7DEEA', text:'#0B2D5B', textDim:'#4F5F78', textFaint:'#8996AC', accent:'#C8102E', accentInk:'#FFFFFF' },
+    palette: ['#0B2D5B','#1D4A85','#3E6FB0','#7FA3D1','#C8102E','#8C0E22','#4C6FA0','#0B2D5B']
+  },
+  mufg: {
+    label: '三菱UFJ系 (レッド × 生成り)',
+    vars: { bg:'#FAF7F2', panel:'#FFFFFF', panel2:'#FFFFFF', border:'#E8DFD3', text:'#231F20', textDim:'#6B6560', textFaint:'#A39C93', accent:'#D71920', accentInk:'#FFFFFF' },
+    palette: ['#D71920','#A30F17','#EF5350','#F5A3A3','#4A4A4A','#8C8C8C','#231F20','#D71920']
+  },
+  goldman: {
+    label: 'ゴールドマン・サックス系 (ネイビー × スティールブルー)',
+    vars: { bg:'#FFFFFF', panel:'#F5F6F8', panel2:'#FFFFFF', border:'#DCE1E8', text:'#12233F', textDim:'#5C697C', textFaint:'#96A2B2', accent:'#6B96C3', accentInk:'#12233F' },
+    palette: ['#12233F','#2C4870','#6B96C3','#A9C2DD','#4A6FA1','#1B3358','#8AA9C9']
+  },
+  tel: {
+    label: '東京エレクトロン系 (ブルー × グリーン)',
+    vars: { bg:'#F7FAFF', panel:'#EFF5FE', panel2:'#FFFFFF', border:'#D7E6FB', text:'#0F2A4A', textDim:'#4C6178', textFaint:'#8DA0B5', accent:'#1A73E8', accentInk:'#FFFFFF' },
+    palette: ['#1A73E8','#0B57C7','#7ED957','#3DDC97','#57C2E8','#0F9D58']
+  },
+  digital: {
+    label: 'デジタル庁風 (白 × ブルー / 行政サービス系)',
+    vars: { bg:'#FFFFFF', panel:'#F7F9FB', panel2:'#FFFFFF', border:'#D9E1EA', text:'#1A1A1A', textDim:'#5C6570', textFaint:'#98A0AA', accent:'#0017C1', accentInk:'#FFFFFF' },
+    palette: ['#0017C1','#3D5AFE','#7C93FF','#00A0E9','#4A4A4A','#8C8C8C']
+  },
+  mac: {
+    label: 'Mac風 (System UI)',
+    vars: { bg:'#F5F5F7', panel:'#FFFFFF', panel2:'#FFFFFF', border:'#E5E5EA', text:'#1D1D1F', textDim:'#6E6E73', textFaint:'#AEAEB2', accent:'#007AFF', accentInk:'#FFFFFF' },
+    palette: ['#007AFF','#34C759','#FF9500','#FF3B30','#AF52DE','#5AC8FA','#FF2D55','#FFCC00']
+  },
+  markmap: {
+    label: 'markmap風 (マインドマップ配色)',
+    vars: { bg:'#FFFFFF', panel:'#FAFAFA', panel2:'#FFFFFF', border:'#E0E0E0', text:'#222222', textDim:'#666666', textFaint:'#999999', accent:'#1F77B4', accentInk:'#FFFFFF' },
+    palette: ['#1F77B4','#FF7F0E','#2CA02C','#D62728','#9467BD','#8C564B','#E377C2','#7F7F7F','#BCBD22','#17BECF']
+  }
+};
+
+function applyThemeVars(id){
+  const theme = THEMES[id] || THEMES.dark;
+  currentThemeId = THEMES[id] ? id : 'dark';
+  const root = document.documentElement.style;
+  root.setProperty('--bg', theme.vars.bg);
+  root.setProperty('--panel', theme.vars.panel);
+  root.setProperty('--panel-2', theme.vars.panel2);
+  root.setProperty('--border', theme.vars.border);
+  root.setProperty('--text', theme.vars.text);
+  root.setProperty('--text-dim', theme.vars.textDim);
+  root.setProperty('--text-faint', theme.vars.textFaint);
+  root.setProperty('--accent', theme.vars.accent);
+  root.setProperty('--accent-ink', theme.vars.accentInk);
+  PALETTE.length = 0;
+  PALETTE.push(...theme.palette);
+  const sel = document.getElementById('theme-select');
+  if(sel) sel.value = currentThemeId;
+}
+
+function switchTheme(id){
+  applyThemeVars(id);
+  // re-assign auto (non-custom) node/category colors from the new theme's palette
+  categoryColors = {};
+  nextColorIndex = 0;
+  refreshAll();
+  renderAddNodeSwatches();
+  autosave();
+  showToast(THEMES[currentThemeId].label + ' に切り替えました');
+}
+
+function populateThemeSelect(){
+  const sel = document.getElementById('theme-select');
+  sel.innerHTML = Object.keys(THEMES).map(id => `<option value="${id}">${escapeHtml(THEMES[id].label)}</option>`).join('');
+}
 
 function uid(prefix){ idCounter++; return prefix + '_' + Date.now().toString(36) + '_' + idCounter; }
 
@@ -337,6 +449,7 @@ function getColor(key){
 }
 function nodeColor(node){
   if(!node) return '#888';
+  if(node.color) return node.color;
   const key = (node.category && node.category.trim()) ? 'cat:' + node.category.trim() : 'node:' + node.id;
   return getColor(key);
 }
@@ -345,6 +458,34 @@ function formatNum(v){
   if(v === undefined || v === null || isNaN(v)) return '';
   if(Number.isInteger(v)) return String(v);
   return (Math.round(v * 100) / 100).toString();
+}
+
+// ---------- Color palette picker (used by add-node form and node edit rows) ----------
+function renderSwatchesInto(container, selectedColor, customInput, onSelect){
+  container.innerHTML = '';
+  PALETTE.forEach(c => {
+    const sw = document.createElement('button');
+    sw.type = 'button';
+    sw.className = 'palette-swatch' + (selectedColor && selectedColor.toLowerCase() === c.toLowerCase() ? ' selected' : '');
+    sw.style.background = c;
+    sw.title = c;
+    sw.addEventListener('click', () => onSelect(c));
+    container.appendChild(sw);
+  });
+  if(customInput){
+    const isCustom = selectedColor && !PALETTE.some(c => c.toLowerCase() === selectedColor.toLowerCase());
+    customInput.classList.toggle('selected', !!isCustom);
+    if(selectedColor) customInput.value = selectedColor;
+  }
+}
+function renderAddNodeSwatches(){
+  const container = document.getElementById('node-palette-swatches');
+  const customInput = document.getElementById('node-color-custom');
+  if(!container) return;
+  renderSwatchesInto(container, pendingNodeColor, customInput, c => {
+    pendingNodeColor = c;
+    renderAddNodeSwatches();
+  });
 }
 
 // ---------- Toast ----------
@@ -360,14 +501,18 @@ function showToast(msg){
 // ---------- Storage ops ----------
 async function autosave(){
   try{
-    await store.set('sankey:current', JSON.stringify({ nodes, links, categoryColors, nextColorIndex, colorMode }));
+    await store.set('sankey:current', JSON.stringify({ nodes, links, categoryColors, nextColorIndex, colorMode, themeId: currentThemeId }));
   }catch(e){ console.error('autosave failed', e); }
 }
 
 async function init(){
+  populateThemeSelect();
+  document.getElementById('theme-select').addEventListener('change', e => switchTheme(e.target.value));
+
   document.getElementById('storage-mode').textContent = hasClaudeStorage
     ? '保存先: Claudeストレージ'
     : (storageAvailable ? '保存先: このブラウザ (localStorage)' : '保存先: 利用不可 (プライベートモードの可能性)');
+  let themeId = 'dark';
   try{
     const cur = await store.get('sankey:current');
     if(cur && cur.value){
@@ -377,9 +522,12 @@ async function init(){
       categoryColors = data.categoryColors || {};
       nextColorIndex = data.nextColorIndex || 0;
       colorMode = data.colorMode || 'source';
+      themeId = data.themeId || 'dark';
     }
   }catch(e){ /* no autosave yet, start empty */ }
+  applyThemeVars(themeId);
   document.getElementById('color-mode').value = colorMode;
+  renderAddNodeSwatches();
   refreshAll();
 }
 
@@ -388,7 +536,7 @@ async function saveDiagram(name){
   if(!name){ showToast('保存名を入力してください'); return; }
   try{
     await store.set('sankey:diagram:' + name, JSON.stringify({
-      nodes, links, categoryColors, nextColorIndex, colorMode, savedAt: new Date().toISOString()
+      nodes, links, categoryColors, nextColorIndex, colorMode, themeId: currentThemeId, savedAt: new Date().toISOString()
     }));
     showToast('「' + name + '」として保存しました');
     document.getElementById('save-name').value = '';
@@ -448,7 +596,9 @@ async function loadDiagram(key){
     categoryColors = data.categoryColors || {};
     nextColorIndex = data.nextColorIndex || 0;
     colorMode = data.colorMode || 'source';
+    applyThemeVars(data.themeId || 'dark');
     document.getElementById('color-mode').value = colorMode;
+    renderAddNodeSwatches();
     refreshAll();
     autosave();
     showToast('読み込みました: ' + key.replace('sankey:diagram:', ''));
@@ -465,13 +615,15 @@ async function deleteDiagram(key){
 }
 
 // ---------- Node / Link operations ----------
-function addNode(name, category){
+function addNode(name, category, color){
   name = name.trim();
   if(!name){ showToast('ノード名を入力してください'); return; }
   if(nodes.some(n => n.name === name)){ showToast('同じ名前のノードがすでにあります'); return; }
-  nodes.push({ id: uid('n'), name, category: category.trim() });
+  nodes.push({ id: uid('n'), name, category: category.trim(), color: color || null });
   document.getElementById('node-name').value = '';
   document.getElementById('node-category').value = '';
+  pendingNodeColor = null;
+  renderAddNodeSwatches();
   refreshAll(); autosave();
 }
 function deleteNode(id){
@@ -480,7 +632,7 @@ function deleteNode(id){
   if(editingNodeId === id) editingNodeId = null;
   refreshAll(); autosave();
 }
-function updateNode(id, name, category){
+function updateNode(id, name, category, color){
   name = name.trim();
   if(!name){ showToast('ノード名は空にできません'); return; }
   if(nodes.some(n => n.id !== id && n.name === name)){ showToast('同じ名前のノードがすでにあります'); return; }
@@ -488,6 +640,7 @@ function updateNode(id, name, category){
   if(!n) return;
   n.name = name;
   n.category = category.trim();
+  n.color = color || null;
   editingNodeId = null;
   refreshAll(); autosave();
 }
@@ -567,12 +720,22 @@ function renderNodeList(){
     div.className = 'item';
     if(editingNodeId === n.id){
       div.innerHTML = `
-        <div class="edit-row">
-          <input type="text" class="edit-name" value="${escapeHtml(n.name)}">
-          <input type="text" class="edit-category" list="category-list" value="${escapeHtml(n.category || '')}" placeholder="カテゴリ">
+        <div style="display:flex; flex-direction:column; gap:6px; flex:1; min-width:0;">
+          <div class="edit-row">
+            <input type="text" class="edit-name" value="${escapeHtml(n.name)}">
+            <input type="text" class="edit-category" list="category-list" value="${escapeHtml(n.category || '')}" placeholder="カテゴリ">
+          </div>
+          <div class="row color-picker-row">
+            <span class="color-picker-label">色:</span>
+            <div class="palette-swatches" id="edit-palette-${n.id}"></div>
+            <input type="color" class="color-custom-input edit-color-custom" value="${n.color || '#4FB6A8'}" title="カスタムカラー">
+            <button type="button" class="small ghost" data-color-auto="${n.id}">自動</button>
+          </div>
         </div>
-        <button class="small primary" data-save-node="${n.id}">✓</button>
-        <button class="small ghost" data-cancel-node="${n.id}">✕</button>
+        <div style="display:flex; flex-direction:column; gap:4px; flex:none;">
+          <button class="small primary" data-save-node="${n.id}">✓</button>
+          <button class="small ghost" data-cancel-node="${n.id}">✕</button>
+        </div>
       `;
     } else {
       div.innerHTML = `
@@ -586,22 +749,38 @@ function renderNodeList(){
       `;
     }
     el.appendChild(div);
+
+    if(editingNodeId === n.id){
+      const swatchContainer = div.querySelector('.palette-swatches');
+      const customInput = div.querySelector('.edit-color-custom');
+      const renderEditSwatches = () => {
+        renderSwatchesInto(swatchContainer, editingNodeColor, customInput, c => { editingNodeColor = c; renderEditSwatches(); });
+      };
+      renderEditSwatches();
+      customInput.addEventListener('input', e => { editingNodeColor = e.target.value; renderEditSwatches(); });
+      div.querySelector('[data-color-auto]').addEventListener('click', () => { editingNodeColor = null; renderEditSwatches(); });
+    }
   });
 
-  el.querySelectorAll('[data-edit-node]').forEach(elm => elm.addEventListener('click', () => { editingNodeId = elm.dataset.editNode; renderNodeList(); }));
+  el.querySelectorAll('[data-edit-node]').forEach(elm => elm.addEventListener('click', () => {
+    editingNodeId = elm.dataset.editNode;
+    const n = nodeById(editingNodeId);
+    editingNodeColor = (n && n.color) || null;
+    renderNodeList();
+  }));
   el.querySelectorAll('[data-up-node]').forEach(b => b.addEventListener('click', () => moveNode(b.dataset.upNode, -1)));
   el.querySelectorAll('[data-down-node]').forEach(b => b.addEventListener('click', () => moveNode(b.dataset.downNode, 1)));
   el.querySelectorAll('[data-del-node]').forEach(b => b.addEventListener('click', () => deleteNode(b.dataset.delNode)));
-  el.querySelectorAll('[data-cancel-node]').forEach(b => b.addEventListener('click', () => { editingNodeId = null; renderNodeList(); }));
+  el.querySelectorAll('[data-cancel-node]').forEach(b => b.addEventListener('click', () => { editingNodeId = null; editingNodeColor = null; renderNodeList(); }));
   el.querySelectorAll('[data-save-node]').forEach(b => {
     const wrap = b.closest('.item');
     const commit = () => {
       const nameInput = wrap.querySelector('.edit-name');
       const catInput = wrap.querySelector('.edit-category');
-      updateNode(b.dataset.saveNode, nameInput.value, catInput.value);
+      updateNode(b.dataset.saveNode, nameInput.value, catInput.value, editingNodeColor);
     };
     b.addEventListener('click', commit);
-    wrap.querySelectorAll('input').forEach(inp => inp.addEventListener('keydown', e => { if(e.key === 'Enter') commit(); if(e.key === 'Escape'){ editingNodeId = null; renderNodeList(); } }));
+    wrap.querySelectorAll('input[type=text]').forEach(inp => inp.addEventListener('keydown', e => { if(e.key === 'Enter') commit(); if(e.key === 'Escape'){ editingNodeId = null; editingNodeColor = null; renderNodeList(); } }));
   });
 }
 
@@ -819,7 +998,7 @@ function drawSankey(){
       text.setAttribute('y', lblY);
       text.setAttribute('dy', '0.32em');
       text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('fill', '#F5F7F8');
+      text.setAttribute('fill', 'var(--text)');
       text.setAttribute('font-size', '10.5');
       text.setAttribute('font-family', "'IBM Plex Mono', monospace");
       text.setAttribute('paint-order', 'stroke');
@@ -840,6 +1019,8 @@ function drawSankey(){
     rectEl.setAttribute('height', Math.max(p.y1 - p.y0, 2));
     rectEl.setAttribute('rx', 2);
     rectEl.setAttribute('fill', nodeColor(n));
+    rectEl.setAttribute('stroke', 'var(--border)');
+    rectEl.setAttribute('stroke-width', '1');
     const title = document.createElementNS(svgns, 'title');
     title.textContent = `${n.name} : ${formatNum(nodeValue[n.id])}`;
     rectEl.appendChild(title);
@@ -852,7 +1033,7 @@ function drawSankey(){
     label.setAttribute('y', (p.y0 + p.y1) / 2);
     label.setAttribute('dy', '0.32em');
     label.setAttribute('text-anchor', leftHalf ? 'start' : 'end');
-    label.setAttribute('fill', '#ECF0F1');
+    label.setAttribute('fill', 'var(--text)');
     label.setAttribute('font-size', '12.5');
     label.setAttribute('font-family', "'Space Grotesk', sans-serif");
     label.textContent = `${n.name} (${formatNum(nodeValue[n.id])})`;
@@ -910,7 +1091,15 @@ function exportJson(){
 
 // ---------- Events ----------
 document.getElementById('btn-add-node').addEventListener('click', () => {
-  addNode(document.getElementById('node-name').value, document.getElementById('node-category').value);
+  addNode(document.getElementById('node-name').value, document.getElementById('node-category').value, pendingNodeColor);
+});
+document.getElementById('node-color-custom').addEventListener('input', e => {
+  pendingNodeColor = e.target.value;
+  renderAddNodeSwatches();
+});
+document.getElementById('node-color-auto').addEventListener('click', () => {
+  pendingNodeColor = null;
+  renderAddNodeSwatches();
 });
 document.getElementById('node-name').addEventListener('keydown', e => { if(e.key === 'Enter') document.getElementById('btn-add-node').click(); });
 document.getElementById('node-category').addEventListener('keydown', e => { if(e.key === 'Enter') document.getElementById('btn-add-node').click(); });
